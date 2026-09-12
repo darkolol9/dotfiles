@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Claude Code activity alert: a tmux status segment plus a sound, raised when
+# Claude finishes a turn or needs an answer, and cleared when you reply.
+#
+# Driven by Claude Code hooks in ~/.claude/settings.json:
+#   Stop             -> tmux-claude-alert done
+#   Notification     -> tmux-claude-alert waiting
+#   UserPromptSubmit -> tmux-claude-alert clear
+#
+# The status line calls `--render`, which prints nothing when no alert is
+# raised, so the segment simply is not there the rest of the time.
+set -uo pipefail
+
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-claude-alert"
+MAX_AGE=7200   # a flag older than 2h is stale (claude exited without replying)
+
+# Sound runs detached: PlaySync blocks for ~2s and a hook must not hold up the
+# turn. Whatever is missing here simply makes it silent, never an error.
+play() {
+    local kind="$1"
+    (
+        if [ -n "${WSL_DISTRO_NAME:-}" ] && command -v powershell.exe >/dev/null 2>&1; then
+            local wav
+            case "$kind" in
+                waiting) wav='C:\Windows\Media\Windows Ding.wav' ;;
+                *)       wav='C:\Windows\Media\Windows Notify System Generic.wav' ;;
+            esac
+            powershell.exe -NoProfile -c "(New-Object Media.SoundPlayer \"$wav\").PlaySync()"
+        elif command -v paplay >/dev/null 2>&1; then
+            case "$kind" in
+                waiting) paplay /usr/share/sounds/freedesktop/stereo/dialog-warning.oga ;;
+                *)       paplay /usr/share/sounds/freedesktop/stereo/complete.oga ;;
+            esac
+        else
+            printf '\a'   # terminal bell, last resort
+        fi
+    ) >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+}
+
+raise() {
+    local kind="$1" where=""
+    # Which tmux session raised this. With many sessions open, "something is
+    # waiting" is not useful unless it says where.
+    if [ -n "${TMUX:-}" ]; then
+        where=$(tmux display-message -p '#{session_name}' 2>/dev/null)
+    fi
+    mkdir -p "$(dirname "$STATE")"
+    printf '%s\n%s\n%s\n' "$kind" "$(date +%s)" "$where" > "$STATE.tmp" &&
+        mv "$STATE.tmp" "$STATE"
+    play "$kind"
+    # Repaint now instead of waiting up to status-interval for the next tick.
+    tmux refresh-client -S 2>/dev/null || true
+}
+
+case "${1:-}" in
+    done|waiting) raise "$1"; exit 0 ;;
+    clear) rm -f "$STATE"; tmux refresh-client -S 2>/dev/null || true; exit 0 ;;
+    --render) ;;
+    *) exit 0 ;;
+esac
+
+# --- render -----------------------------------------------------------------
+[ -f "$STATE" ] || exit 0
+{ read -r kind; read -r when; read -r where; } < "$STATE" 2>/dev/null || exit 0
+[ -n "${kind:-}" ] && [ -n "${when:-}" ] || exit 0
+[ $(( $(date +%s) - when )) -lt "$MAX_AGE" ] || exit 0
+
+case "$kind" in
+    waiting) colour='#f38ba8'; label='waiting for you' ;;
+    done)    colour='#a6e3a1'; label='done' ;;
+    *) exit 0 ;;
+esac
+
+suffix=""
+[ -n "${where:-}" ] && suffix=" #[fg=#6c7086]${where:0:24}"
+printf '#[bg=#1e1e2e,fg=%s,bold] * claude %s#[nobold]%s#[default,bg=#1e1e2e] ' \
+       "$colour" "$label" "$suffix"

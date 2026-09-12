@@ -103,6 +103,39 @@ runs" while the job is in fact running and returning correct output:
    sequences included** -- not visible columns. A segment showing ~18 characters
    is easily 150 bytes of markup, so the limits are set to 400 / 1000.
 
+## Claude activity alert
+
+When Claude finishes a turn or needs an answer, the bar raises a segment and a
+sound plays:
+
+```
+* claude waiting for you  weight_loss_2026-10     (red)
+* claude done  weight_loss_2026-10                (green)
+```
+
+It names the tmux session that raised it -- with a dozen sessions open, "something
+is waiting" is useless without saying where. The segment clears the moment you
+send your next prompt, and is absent entirely the rest of the time.
+
+Driven by Claude Code hooks in `~/.claude/settings.json` (**not** tracked in this
+repo -- see below):
+
+| event | action |
+| --- | --- |
+| `Stop` | `tmux-claude-alert done` |
+| `Notification` | `tmux-claude-alert waiting` |
+| `UserPromptSubmit` | `tmux-claude-alert clear` |
+
+The sound is fired detached, because `SoundPlayer.PlaySync` blocks for ~2s and a
+hook must not hold up the end of a turn -- raising an alert returns in ~0.02s. It
+picks PowerShell + a Windows notify sound under WSL, `paplay` on Linux, and falls
+back to the terminal bell; a missing player makes it silent, never an error. A
+flag older than two hours is ignored, so a Claude that exited without a reply
+does not leave the bar stuck.
+
+**Syncing this to another machine** needs the three hook entries added to that
+machine's `~/.claude/settings.json`; only the tmux side lives here.
+
 ## Claude usage segment
 
 The status bar shows Claude Code rate limits as
