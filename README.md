@@ -75,6 +75,28 @@ little or not at all. And it deliberately does not flash
 pane against the window edge has no outline there and a border flash reads as a
 partial bracket rather than a highlight.
 
+## CPU and memory segment
+
+The left of the status bar shows `cpu 20%  ram 11%`, with the same colour
+convention as the Claude segment: normal in the bar's own foreground, >=70%
+amber, >=90% red and bold.
+
+CPU is a delta. `/proc/stat` counters are totals since boot, so a single read
+says nothing; rather than sleeping between two samples and stalling every status
+redraw, the script remembers the previous sample and reports the average over
+the interval since -- exactly the window the status line refreshes on. Only when
+there is no usable previous sample does it take a brief inline one. Memory is
+`MemTotal - MemAvailable`, not `MemFree`, which would report a machine with a
+warm page cache as nearly full.
+
+It prints nothing without `/proc`, so the segment disappears on macOS rather
+than erroring.
+
+**Ordering constraint:** the `#()` must sit *before* the `#{mouse:?...}`
+conditional in `status-left`. tmux fails to expand a job that follows a `#{...}`
+conditional containing nested `#[...]` styles -- the job runs and returns correct
+output, but nothing is drawn. This cost a long debugging session; do not move it.
+
 ## Claude usage segment
 
 The status bar shows Claude Code rate limits as `claude  session 8%  week 7%`

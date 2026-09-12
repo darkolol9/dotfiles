@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# CPU and memory segment for the tmux status line.
+#
+# CPU is a delta: /proc/stat counters are totals since boot, so a single read
+# says nothing. Rather than sleep between two samples -- which would stall every
+# status redraw -- it remembers the previous sample and reports the average over
+# the interval since, which is exactly the window the status line refreshes on.
+# Only when there is no usable previous sample does it take a brief inline one.
+#
+# Prints nothing on a machine without /proc (macOS), so the segment disappears
+# rather than erroring.
+set -uo pipefail
+
+STATE="${XDG_CACHE_HOME:-$HOME/.cache}/tmux-sysload.state"
+MAX_WINDOW=300   # a sample older than this averages over too long a span
+
+[ -r /proc/stat ] && [ -r /proc/meminfo ] || exit 0
+
+# "busy total" from the aggregate cpu line. idle+iowait count as not-busy.
+sample() {
+    awk '/^cpu /{ t = 0; for (i = 2; i <= NF; i++) t += $i; print t - ($5 + $6), t; exit }' /proc/stat
+}
+
+now=$(date +%s)
+read -r b1 t1 < <(sample)
+[ -n "${t1:-}" ] || exit 0
+
+use_prev=0
+if [ -r "$STATE" ]; then
+    read -r pts pb pt < "$STATE" 2>/dev/null || true
+    if [ -n "${pt:-}" ] && [ "$((now - pts))" -le "$MAX_WINDOW" ] && [ "$t1" -gt "$pt" ]; then
+        use_prev=1
+    fi
+fi
+
+if [ "$use_prev" -eq 1 ]; then
+    db=$((b1 - pb)); dt=$((t1 - pt)); b2=$b1; t2=$t1
+else
+    sleep 0.25
+    read -r b2 t2 < <(sample)
+    db=$((b2 - b1)); dt=$((t2 - t1))
+fi
+
+mkdir -p "$(dirname "$STATE")"
+printf '%s %s %s\n' "$now" "$b2" "$t2" > "$STATE.tmp" && mv "$STATE.tmp" "$STATE"
+
+[ "${dt:-0}" -gt 0 ] || exit 0
+cpu=$(( (db * 100 + dt / 2) / dt ))
+[ "$cpu" -lt 0 ] && cpu=0
+[ "$cpu" -gt 100 ] && cpu=100
+
+# Used = total - available. MemAvailable, not MemFree: free excludes reclaimable
+# cache and would report a machine with a warm page cache as nearly full.
+ram=$(awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }
+           END { if (t > 0) printf "%d", (t - a) * 100 / t + 0.5 }' /proc/meminfo)
+[ -n "${ram:-}" ] || exit 0
+
+# Same convention as the claude segment: colour means something. Normal renders
+# in the bar's own foreground; only a number worth looking at takes colour.
+style() {
+    if   [ "$1" -ge 90 ]; then printf '#f38ba8,bold'
+    elif [ "$1" -ge 70 ]; then printf '#f9e2af'
+    else                       printf '#cdd6f4'
+    fi
+}
+
+dim='#6c7086'
+printf '#[bg=#1e1e2e,fg=%s] cpu #[fg=%s]%d%%#[default,bg=#1e1e2e,fg=%s]  ram #[fg=%s]%d%%#[default,bg=#1e1e2e] ' \
+       "$dim" "$(style "$cpu")" "$cpu" "$dim" "$(style "$ram")" "$ram"
