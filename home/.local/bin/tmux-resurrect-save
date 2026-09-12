@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Single-flight, rate-limited wrapper around tmux-resurrect's save.sh.
+#
+# Why this exists: save.sh names its output with one-second granularity and ends
+# with
+#     if files_differ "$new" "$last"; then ln -fs "$new" "$last"; else rm "$new"; fi
+# so two saves in the same second compute the SAME path. The first writes it and
+# points "last" at it; the second rewrites the identical file, compares it to
+# "last" -- which now IS that file -- finds no difference, and deletes it. That
+# leaves "last" dangling and nothing is ever restored.
+#
+# A session-closed hook fires once per session, so a bulk kill (or a server
+# shutdown) guarantees that collision. This wrapper lets exactly one save run per
+# burst, on the trailing edge so it captures the final state.
+set -uo pipefail
+
+dir="$HOME/.local/share/tmux/resurrect"
+save="$HOME/.tmux/plugins/tmux-resurrect/scripts/save.sh"
+last="$dir/last"
+
+[ -x "$save" ] || exit 0
+mkdir -p "$dir"
+
+# Non-blocking: if a save is already in flight this one is redundant, so drop it
+# rather than queue up behind it.
+exec 9>"$dir/.save.lock" || exit 0
+flock -n 9 || exit 0
+
+# Repair a "last" left dangling by a previous collision, so cmp has a real file
+# to compare against.
+if [ -L "$last" ] && [ ! -e "$last" ]; then
+    rm -f "$last"
+fi
+
+# Trailing edge: let the rest of the burst land before snapshotting, so the one
+# save we do run records the final state rather than a half-finished one.
+sleep 1
+
+# Belt and braces -- never start a save that would land in the same one-second
+# filename slot as the previous one.
+if [ -e "$last" ]; then
+    prev=$(stat -c %Y "$(readlink -f "$last")" 2>/dev/null || echo 0)
+    [ $(( $(date +%s) - prev )) -lt 2 ] && exit 0
+fi
+
+exec "$save" quiet >/dev/null 2>&1

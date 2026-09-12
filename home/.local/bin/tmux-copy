@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Read stdin, put it on whatever clipboard this machine actually has.
+#
+# Bound from .tmux.conf so one config works on X11, Wayland, macOS and WSL
+# without if-shell branches in the tmux file. Silently discards the copy if the
+# machine has no clipboard tool rather than erroring inside copy-mode.
+if   command -v pbcopy  >/dev/null 2>&1; then exec pbcopy
+elif command -v wl-copy >/dev/null 2>&1; then exec wl-copy
+elif command -v xclip   >/dev/null 2>&1; then exec xclip -selection clipboard -i
+elif command -v xsel    >/dev/null 2>&1; then exec xsel --clipboard --input
+elif command -v clip.exe >/dev/null 2>&1; then exec clip.exe
+else cat >/dev/null
+fi

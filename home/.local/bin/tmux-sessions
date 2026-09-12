@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# tmux-sessions — interactive tmux session manager (fzf)
+#
+#   Tab      mark / unmark a session for a bulk action
+#   Ctrl-A   mark every session       Ctrl-O  unmark every session
+#   Ctrl-X   kill every marked session (or the one under the cursor)
+#   Enter    switch to (attach, if outside tmux) the session under the cursor
+#   Ctrl-N   create a new session
+#   Ctrl-R   rename the session under the cursor
+#   Ctrl-T   toggle the preview pane
+#   Esc      quit, changing nothing
+#
+# Internal subcommands (--list/--preview/--kill/--new/--rename) exist so the
+# fzf key bindings can call back into this same script.
+
+set -uo pipefail
+
+# Splits "raw session name" from "pretty display string" on each line. tmux
+# silently rewrites ":" to "_" in session names, so a colon can never appear
+# inside one -- and unlike a control byte, tmux passes it through -F unescaped.
+SEP=':'
+SELF="${BASH_SOURCE[0]}"
+case "$SELF" in */*) SELF="$(cd "$(dirname "$SELF")" && pwd)/$(basename "$SELF")";; esac
+
+_list() {
+    tmux list-sessions \
+        -F "#{session_name}${SEP}#{session_windows}${SEP}#{?session_attached,1,0}" 2>/dev/null |
+    sort -f |
+    awk -F"$SEP" -v sep="$SEP" '
+        BEGIN { blue="\033[38;5;111m"; green="\033[38;5;150m"
+                dim="\033[38;5;243m"; reset="\033[0m" }
+        {
+            mark = ($3 == "1") ? green "*" : dim "."
+            printf "%s%s %s %s%-32s%s%3d win%s\n",
+                   $1, sep, mark reset, blue, $1, dim, $2, reset
+        }'
+}
+
+# $1 is the raw session name. "=" makes the target an exact match, so a session
+# named "7" is never confused with "7x" by tmux's prefix matching.
+_preview() {
+    local s="$1"
+    [ -z "$s" ] && return 0
+    printf '\033[38;5;111mwindows\033[0m\n'
+    tmux list-windows -t "=$s" \
+        -F '  #{window_index}: #{window_name}#{?window_active, <,}  #{pane_current_command}  #{pane_current_path}' 2>/dev/null
+    printf '\n\033[38;5;111mactive pane\033[0m\n'
+    # Drop the pane's trailing blank lines, otherwise a fresh shell previews
+    # as an empty box.
+    # "=$s:" -- the trailing colon makes this a pane target (the active pane of
+    # the session's current window); bare "=$s" is a session target and fails here.
+    tmux capture-pane -ep -t "=$s:" 2>/dev/null |
+        awk '{ line[NR] = $0; if (NF) last = NR }
+             END { for (i = 1; i <= last; i++) print "  " line[i] }' |
+        tail -n 40
+}
+
+# tmux-resurrect/continuum restore whatever is in the most recent save file.
+# continuum's periodic save is driven by status-line redraws, so it is stale by
+# up to the save interval -- and stops entirely when no client is attached.
+# Without an immediate save here, a session killed above is resurrected on the
+# next tmux start, which is exactly the bug this works around.
+_resurrect_save() {
+    local script="$HOME/.local/bin/tmux-resurrect-save"
+    # Backgrounded: the wrapper waits a beat for the burst to settle, and the
+    # UI should not block on that. Never call save.sh directly -- see the
+    # wrapper for why concurrent saves destroy the save file.
+    [ -x "$script" ] && "$script" >/dev/null 2>&1 &
+    return 0
+}
+
+_kill() {
+    local s ans
+    [ "$#" -eq 0 ] && return 0
+    [ "$#" -eq 1 ] && [ -z "$1" ] && return 0
+
+    # Killing one session is a keystroke; killing a marked batch is worth a
+    # beat of confirmation, since every process in them dies with them.
+    if [ "$#" -gt 1 ]; then
+        # Straight to the tty: fzf's execute() swallows the command's stdout.
+        {
+            printf '\033[38;5;211mkill these %d sessions?\033[0m\n' "$#"
+            printf '  %s\n' "$@"
+            printf '\n'
+        } > /dev/tty
+        read -r -p 'type y to confirm: ' ans < /dev/tty
+        case "$ans" in
+            y|Y|yes|YES) ;;
+            *) return 0 ;;
+        esac
+    fi
+
+    for s in "$@"; do
+        [ -n "$s" ] && tmux kill-session -t "=$s" 2>/dev/null
+    done
+    _resurrect_save
+}
+
+_new() {
+    local n
+    read -r -p "new session name: " n
+    [ -n "${n:-}" ] || return 0
+    tmux new-session -d -s "$n"
+    _resurrect_save
+}
+
+_rename() {
+    local old="$1" n
+    # Empty when the key was pressed with no match under the cursor.
+    [ -z "$old" ] && return 0
+    read -r -p "rename '$old' to: " n
+    [ -n "${n:-}" ] || return 0
+    tmux rename-session -t "=$old" "$n"
+    _resurrect_save
+}
+
+case "${1:-}" in
+    --list)    _list; exit 0 ;;
+    --preview) _preview "${2:-}"; exit 0 ;;
+    --kill)    shift; _kill "$@"; exit 0 ;;
+    --new)     _new; exit 0 ;;
+    --rename)  _rename "${2:-}"; exit 0 ;;
+esac
+
+if ! tmux list-sessions >/dev/null 2>&1; then
+    echo "no tmux sessions."
+    _new
+    exit 0
+fi
+
+selection=$(
+    _list | fzf --ansi --multi --cycle --info=inline \
+        --delimiter="$SEP" --with-nth=2.. \
+        --layout=reverse --border=rounded --border-label=' tmux sessions ' \
+        --prompt='session > ' --pointer='>' --marker='+' \
+        --color='border:#45475a,label:#89b4fa,prompt:#89b4fa,pointer:#f38ba8,marker:#a6e3a1,header:#6c7086' \
+        --header='tab mark  ctrl-a mark all  ctrl-o unmark all  ctrl-x kill marked
+enter switch  ctrl-n new  ctrl-r rename  ctrl-t preview' \
+        --preview="'$SELF' --preview {1}" \
+        --preview-window='right,52%,border-left' \
+        --bind="ctrl-x:execute('$SELF' --kill {+1})+clear-selection+reload('$SELF' --list)" \
+        --bind='ctrl-a:select-all' \
+        --bind='ctrl-o:deselect-all' \
+        --bind="ctrl-n:execute('$SELF' --new)+reload('$SELF' --list)" \
+        --bind="ctrl-r:execute('$SELF' --rename {1})+reload('$SELF' --list)" \
+        --bind='ctrl-t:toggle-preview'
+) || exit 0
+
+name=$(printf '%s\n' "$selection" | head -n1 | awk -F"$SEP" '{print $1}')
+[ -z "$name" ] && exit 0
+
+if [ -n "${TMUX:-}" ]; then
+    tmux switch-client -t "=$name"
+else
+    tmux attach-session -t "=$name"
+fi

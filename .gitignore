@@ -1,0 +1,11 @@
+# TPM keeps each plugin as its own git clone. Committing them would nest repos
+# and fight TPM; `prefix + I` recreates them from the @plugin lines instead.
+home/.tmux/plugins/
+
+# Machine-local session state: tmux-resurrect snapshots. Deliberately never
+# synced -- each save records every pane's command line and working directory,
+# and sessions are not wanted on other machines anyway.
+home/.local/share/tmux/
+
+# install.sh sets these aside when it finds a real file where a link should go.
+*.backup.*
