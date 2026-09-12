@@ -83,12 +83,19 @@ except Exception:
 [ -n "${five:-}" ] && [ -n "${seven:-}" ] || exit 0
 
 worst=$(( five > seven ? five : seven ))
-if   [ "$worst" -ge 80 ]; then colour='#f38ba8'
-elif [ "$worst" -ge 50 ]; then colour='#f9e2af'
-else                           colour='#a6e3a1'
+
+# Colour is a signal, not decoration: normal usage renders in the bar's own
+# foreground and only an elevated number takes on colour, so anything coloured
+# in this segment means something.
+#
+# Deliberately NOT a filled block. The neighbouring hostname block is
+# bg=#a6e3a1, and an "all is well" green block next to it merged into one
+# continuous green bar with no visible boundary.
+dim='#6c7086'
+if   [ "$worst" -ge 80 ]; then value='#f38ba8'; emphasis=',bold'
+elif [ "$worst" -ge 50 ]; then value='#f9e2af'; emphasis=''
+else                           value='#cdd6f4'; emphasis=''
 fi
 
-# A single %: tmux applies strftime to the status format string but not to the
-# output of #(), so a literal percent passes through untouched.
-printf '#[fg=#1e1e2e,bg=%s] 5h %d%% 7d %d%% #[fg=%s,bg=#1e1e2e]' \
-       "$colour" "$five" "$seven" "$colour"
+printf '#[bg=#1e1e2e,fg=%s] claude  session #[fg=%s%s]%d%%#[default,bg=#1e1e2e,fg=%s]  week #[fg=%s%s]%d%%#[default,bg=#1e1e2e] ' \
+       "$dim" "$value" "$emphasis" "$five" "$dim" "$value" "$emphasis" "$seven"

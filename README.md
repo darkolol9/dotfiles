@@ -77,9 +77,16 @@ partial bracket rather than a highlight.
 
 ## Claude usage segment
 
-The status bar shows Claude Code rate limits as `5h 7% 7d 7%` -- session
-(5-hour) and weekly utilisation -- coloured green under 50%, amber under 80%,
-red above.
+The status bar shows Claude Code rate limits as `claude  session 8%  week 7%`
+-- the 5-hour session window and the weekly one.
+
+Colour is a signal rather than decoration: a normal number renders in the bar's
+own foreground, 50% and above turns amber, 80% and above red and bold. So
+anything coloured in this segment means something.
+
+It is deliberately not a filled block. The hostname block beside it is
+`bg=#a6e3a1`, and an "all is well" green block rendered next to it merged into
+one continuous green bar with no visible boundary.
 
 It appears **only when the data is really there**. `claude` not installed, no
 `~/.claude/.credentials.json`, no `curl`, a failed or unparsable fetch, or a
