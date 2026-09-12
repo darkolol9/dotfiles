@@ -40,7 +40,11 @@ link() {
         if [ "$(readlink -f "$to")" = "$from" ]; then
             printf '  ok     %s\n' "$rel"; return
         fi
-        rm -f "$to"
+        # A symlink we do not own -- another dotfiles manager, most likely.
+        # Rename it aside rather than rm it, so where it pointed stays on
+        # record and the other manager can be put back.
+        mv "$to" "$to.backup.$stamp"
+        printf '  backup %s (was a link to %s)\n' "$rel" "$(readlink "$to.backup.$stamp")"
     elif [ -e "$to" ]; then
         mv "$to" "$to.backup.$stamp"
         printf '  backup %s -> %s.backup.%s\n' "$rel" "$rel" "$stamp"
