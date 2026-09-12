@@ -92,15 +92,25 @@ warm page cache as nearly full.
 It prints nothing without `/proc`, so the segment disappears on macOS rather
 than erroring.
 
-**Ordering constraint:** the `#()` must sit *before* the `#{mouse:?...}`
-conditional in `status-left`. tmux fails to expand a job that follows a `#{...}`
-conditional containing nested `#[...]` styles -- the job runs and returns correct
-output, but nothing is drawn. This cost a long debugging session; do not move it.
+**Two tmux traps this walked into**, both of which present as "my `#()` never
+runs" while the job is in fact running and returning correct output:
+
+1. A `#{...}` conditional with `#[...]` styles nested inside it makes the *whole*
+   component render as nothing once any `#()` job is added to it. The mouse
+   indicator used to be `#{mouse:?#[bg=#a6e3a1] 🖱 #[default]}`; it now picks the
+   colour inside the style spec and emits only plain text from the conditional.
+2. `status-left-length` / `status-right-length` count **raw bytes, style
+   sequences included** -- not visible columns. A segment showing ~18 characters
+   is easily 150 bytes of markup, so the limits are set to 400 / 1000.
 
 ## Claude usage segment
 
-The status bar shows Claude Code rate limits as `claude  session 8%  week 7%`
--- the 5-hour session window and the weekly one.
+The status bar shows Claude Code rate limits as
+`claude  session 18% (1h22m)  week 8% (1d6h)` -- the 5-hour session window and
+the weekly one, each with the time until it next resets.
+
+The countdown is omitted rather than shown negative when a reset time is missing
+or already past, so a stale cache degrades to bare percentages.
 
 Colour is a signal rather than decoration: a normal number renders in the bar's
 own foreground, 50% and above turns amber, 80% and above red and bold. So
