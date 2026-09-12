@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Briefly tint the whole body of the pane focus just moved to, so it announces
+# itself.
+#
+# Tints via window-active-style rather than flashing pane-active-border-style:
+# tmux only draws a border where two panes meet, so a pane against the window
+# edge gets no outline there and a border flash reads as a partial bracket
+# rather than a highlight. window-active-style colours the entire pane.
+#
+# Caveat worth knowing: this sets the *default* background for the pane's cells,
+# so it shows through anywhere the running program has not painted its own
+# background. A shell tints completely; a full-screen TUI that paints its own
+# background (vim, htop) tints little or not at all.
+#
+# Driven by the after-select-pane hook, which covers every route into a pane:
+# the Alt-arrow bindings, prefix + arrow, and mouse clicks alike.
+set -uo pipefail
+
+opt() { tmux show -gv "$1" 2>/dev/null; }
+
+flash="$(opt @pane_flash_style)"
+rest="$(opt @pane_rest_style)"
+ms="$(opt @pane_flash_ms)"
+
+[ -n "$flash" ] || flash='bg=#1e3a5f'
+[ -n "$rest"  ] || rest='default'
+[ -n "$ms"    ] || ms=150
+
+# One flash at a time. Moving quickly across several panes should hold the tint
+# and settle once, not queue a restore per pane and strobe.
+exec 9>"${TMPDIR:-/tmp}/.tmux-pane-flash.$(id -u).lock" || exit 0
+flock -n 9 || exit 0
+
+# Restore on any exit, so a flash killed mid-sleep (server shutdown, config
+# reload) cannot strand a pane tinted.
+trap 'tmux set -g window-active-style "$rest" 2>/dev/null' EXIT INT TERM
+
+tmux set -g window-active-style "$flash"
+sleep "$(awk -v m="$ms" 'BEGIN { printf "%.3f", m / 1000 }')"

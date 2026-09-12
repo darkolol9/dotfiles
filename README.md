@@ -53,6 +53,28 @@ rebuilds the clones from them.
 Also `prefix + S` for tmux's native tree and `prefix + X` to kill the current
 session.
 
+## Pane flash
+
+Moving focus between panes briefly tints the body of the pane you land on, so
+it is obvious which one is selected. Tunable in `.tmux.conf`:
+
+```tmux
+set -g @pane_flash_style 'bg=#1e3a5f'   # the tint
+set -g @pane_rest_style  'default'      # what it returns to
+set -g @pane_flash_ms    '150'          # how long
+```
+
+It is driven by the `after-select-pane` hook, so it covers every route into a
+pane: the Alt-arrow bindings, `prefix` + arrow, and mouse clicks.
+
+Two things to know. It tints via `window-active-style`, which sets the pane's
+*default* background, so it shows wherever the running program has not painted
+its own -- a shell tints completely, a full-screen TUI like vim or htop tints
+little or not at all. And it deliberately does not flash
+`pane-active-border-style`: tmux draws a border only where two panes meet, so a
+pane against the window edge has no outline there and a border flash reads as a
+partial bracket rather than a highlight.
+
 ## Why tmux-resurrect-save exists
 
 `save.sh` names its output file to the second and ends with:
