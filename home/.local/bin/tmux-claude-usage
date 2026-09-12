@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Claude Code rate-limit segment for the tmux status line: session (5h) and
+# weekly utilisation, as percentages.
+#
+# Prints NOTHING, and exits 0, unless the data is genuinely available -- no
+# claude install, no credentials, no curl, a failed or unparsable fetch all
+# render an empty segment rather than an error or a stale-looking zero.
+#
+# The status line re-runs this every status-interval, so it never performs the
+# network call inline: it serves whatever is cached and refreshes in the
+# background. A tick with no cache yet prints nothing and the segment simply
+# appears a tick later.
+set -uo pipefail
+
+CREDS="$HOME/.claude/.credentials.json"
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}"
+CACHE="$CACHE_DIR/tmux-claude-usage.json"
+LOCK="$CACHE_DIR/tmux-claude-usage.lock"
+ENDPOINT="https://api.anthropic.com/api/oauth/usage"
+
+FRESH_SECS=120     # younger than this: serve as is, no refresh
+MAX_AGE_SECS=900   # older than this: treat as unusable and hide
+
+age_of() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )); }
+
+# --- internal: fetch and atomically replace the cache -----------------------
+if [ "${1:-}" = "--refresh" ]; then
+    mkdir -p "$CACHE_DIR"
+    exec 9>"$LOCK" || exit 0
+    flock -n 9 || exit 0          # a refresh is already in flight
+
+    token=$(python3 -c "
+import json,sys
+try:
+    print(json.load(open(sys.argv[1]))['claudeAiOauth']['accessToken'])
+except Exception:
+    sys.exit(1)
+" "$CREDS" 2>/dev/null) || exit 0
+    [ -n "$token" ] || exit 0
+
+    # Token goes in via stdin config, never argv, so it cannot leak into ps.
+    body=$(printf 'url = "%s"\nheader = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' \
+             "$ENDPOINT" "$token" |
+           curl -sS --max-time 10 -K - 2>/dev/null) || exit 0
+    unset token
+
+    # Only replace the cache with something that actually parses and carries
+    # the two windows we render.
+    printf '%s' "$body" | python3 -c "
+import json,sys
+d = json.load(sys.stdin)
+for k in ('five_hour','seven_day'):
+    w = d.get(k)
+    if not isinstance(w, dict) or w.get('utilization') is None:
+        sys.exit(1)
+json.dump({k: round(float(d[k]['utilization'])) for k in ('five_hour','seven_day')}, sys.stdout)
+" > "$CACHE.tmp" 2>/dev/null && mv "$CACHE.tmp" "$CACHE" || rm -f "$CACHE.tmp"
+    exit 0
+fi
+
+# --- render -----------------------------------------------------------------
+# Hide entirely unless every prerequisite is present.
+command -v claude  >/dev/null 2>&1 || exit 0
+command -v curl    >/dev/null 2>&1 || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+[ -r "$CREDS" ] || exit 0
+
+if [ ! -f "$CACHE" ] || [ "$(age_of "$CACHE")" -ge "$FRESH_SECS" ]; then
+    setsid "$0" --refresh >/dev/null 2>&1 &   # detached: never blocks the status line
+fi
+
+[ -f "$CACHE" ] || exit 0
+[ "$(age_of "$CACHE")" -lt "$MAX_AGE_SECS" ] || exit 0
+
+read -r five seven < <(python3 -c "
+import json,sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print(int(d['five_hour']), int(d['seven_day']))
+except Exception:
+    pass
+" "$CACHE" 2>/dev/null)
+[ -n "${five:-}" ] && [ -n "${seven:-}" ] || exit 0
+
+worst=$(( five > seven ? five : seven ))
+if   [ "$worst" -ge 80 ]; then colour='#f38ba8'
+elif [ "$worst" -ge 50 ]; then colour='#f9e2af'
+else                           colour='#a6e3a1'
+fi
+
+# A single %: tmux applies strftime to the status format string but not to the
+# output of #(), so a literal percent passes through untouched.
+printf '#[fg=#1e1e2e,bg=%s] 5h %d%% 7d %d%% #[fg=%s,bg=#1e1e2e]' \
+       "$colour" "$five" "$seven" "$colour"

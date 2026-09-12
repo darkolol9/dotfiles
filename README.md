@@ -75,6 +75,28 @@ little or not at all. And it deliberately does not flash
 pane against the window edge has no outline there and a border flash reads as a
 partial bracket rather than a highlight.
 
+## Claude usage segment
+
+The status bar shows Claude Code rate limits as `5h 7% 7d 7%` -- session
+(5-hour) and weekly utilisation -- coloured green under 50%, amber under 80%,
+red above.
+
+It appears **only when the data is really there**. `claude` not installed, no
+`~/.claude/.credentials.json`, no `curl`, a failed or unparsable fetch, or a
+cache older than 15 minutes all render an empty string, so the segment vanishes
+instead of showing an error or a misleading zero.
+
+Data comes from `GET api.anthropic.com/api/oauth/usage` using the OAuth token
+Claude Code already stores -- the same endpoint `/usage` uses -- read directly,
+with no dependency on any other project. The token is passed to curl through a
+stdin config file so it never appears in `argv`, and the cache holds nothing but
+the two integers.
+
+The status line re-runs the script every `status-interval`, so it never makes
+the network call inline: it serves a cache (refreshed in the background when
+older than 2 minutes) and prints nothing on a tick that has no cache yet, so the
+segment simply appears a tick later.
+
 ## Why tmux-resurrect-save exists
 
 `save.sh` names its output file to the second and ends with:
