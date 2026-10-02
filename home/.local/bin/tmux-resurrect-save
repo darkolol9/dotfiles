@@ -43,4 +43,19 @@ if [ -e "$last" ]; then
     [ $(( $(date +%s) - prev )) -lt 2 ] && exit 0
 fi
 
-exec "$save" quiet >/dev/null 2>&1
+# Never snapshot an empty server. When the final session closes, the
+# session-closed hook still fires and save.sh writes a 0-byte file and points
+# "last" at it. continuum then auto-restores that on the next start, resurrect
+# discards the initial session, and tmux exits the instant it is launched.
+[ -n "$(tmux list-sessions -F x 2>/dev/null)" ] || exit 0
+
+"$save" quiet >/dev/null 2>&1
+
+# The server can still die mid-save. If what landed is empty, drop it and fall
+# back to the newest non-empty snapshot.
+if [ ! -s "$last" ]; then
+    [ -e "$last" ] && rm -f "$(readlink -f "$last")"
+    good=$(find "$dir" -maxdepth 1 -name 'tmux_resurrect_*.txt' -size +0 -printf '%f\n' | sort | tail -n 1)
+    if [ -n "$good" ]; then ln -sfn "$good" "$last"; else rm -f "$last"; fi
+fi
+exit 0
